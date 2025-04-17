@@ -2,9 +2,9 @@
     "name": "markup-js",
     "version": "1.5.21",
     "description": "Markup.js - Powerful JavaScript Templates",
-    "homepage": "https://github.com/adammark/Markup.js",
+    "homepage": "https://github.com/VladimirUE4/Markup.js",
     "author": {
-        "name": "Adam Mark"
+        "name": "VladimirUE4"
     },
     "files": [
         "src/markup.js",
