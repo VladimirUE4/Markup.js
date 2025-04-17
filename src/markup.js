@@ -2,6 +2,7 @@
   Markup.js v1.5.21: http://github.com/adammark/Markup.js
   MIT License
   (c) 2011 - 2014 Adam Mark
+  Modified to fix issues with custom delimiters
 */
 var Mark = {
     // Templates to include, by name. A template is a string.
@@ -49,6 +50,11 @@ var Mark = {
     _pipe: function (val, expressions) {
         var expression, parts, fn, result;
 
+        // Si val est undefined, retourner une chaîne vide au lieu de planter
+        if (val === undefined) {
+            return "";
+        }
+
         // If we have expressions, pull out the first one, e.g. "add>10".
         if ((expression = expressions.shift())) {
 
@@ -66,6 +72,7 @@ var Mark = {
                 val = this._pipe(result, expressions);
             }
             catch (e) {
+                console.error(`Pipe error in function '${fn}': ${e.message}`);
             }
         }
 
@@ -80,6 +87,11 @@ var Mark = {
             i = -1,
             j,
             opts;
+
+        // Protection contre les erreurs de contexte null/undefined
+        if (ctx === null || ctx === undefined) {
+            return "";
+        }
 
         if (result instanceof Array) {
             result = "";
@@ -109,10 +121,14 @@ var Mark = {
     },
 
     // Determine the extent of a block expression, e.g. "{{foo}}...{{/foo}}"
-    _bridge: function (tpl, tkn) {
+    _bridge: function (tpl, tkn, openDel, closeDel) {
         tkn = tkn == "." ? "\\." : tkn.replace(/\$/g, "\\$");
 
-        var exp = "{{\\s*" + tkn + "([^/}]+\\w*)?}}|{{/" + tkn + "\\s*}}",
+        // Utiliser les délimiteurs fournis ou par défaut
+        var od = openDel ? openDel.replace(/([.*+?^=!:${}()|[\]\/\\])/g, "\\$&") : "\\{\\{";
+        var cd = closeDel ? closeDel.replace(/([.*+?^=!:${}()|[\]\/\\])/g, "\\$&") : "\\}\\}";
+        
+        var exp = od + "\\s*" + tkn + "([^/}]+\\w*)?"+cd+"|"+od+"/" + tkn + "\\s*"+cd,
             re = new RegExp(exp, "g"),
             tags = tpl.match(re) || [],
             t,
@@ -126,7 +142,7 @@ var Mark = {
             t = i;
             c = tpl.indexOf(tags[t], c + 1);
 
-            if (tags[t].indexOf("{{/") > -1) {
+            if (tags[t].indexOf(openDel + "/") > -1) {
                 b++;
             }
             else {
@@ -153,7 +169,9 @@ Mark.up = function (template, context, options) {
     options = options || {};
 
     // Match all tags like "{{...}}".
-    var re = /\{\{(.+?)\}\}/g,
+    var open = options.openDelimiter || "{{",
+    close = options.closeDelimiter || "}}",
+    re = new RegExp(open.replace(/([.*+?^=!:${}()|[\]\/\\])/g, "\\$&") + "(.+?)" + close.replace(/([.*+?^=!:${}()|[\]\/\\])/g, "\\$&"), "g"),
         // All tags in the template.
         tags = template.match(re) || [],
         // The tag being evaluated, e.g. "{{hamster|dance}}".
@@ -211,17 +229,19 @@ Mark.up = function (template, context, options) {
     while ((tag = tags[i++])) {
         result = undefined;
         child = "";
-        selfy = tag.indexOf("/}}") > -1;
-        prop = tag.substr(2, tag.length - (selfy ? 5 : 4));
-        prop = prop.replace(/`(.+?)`/g, function (s, p1) {
-            return Mark.up("{{" + p1 + "}}", context);
+        selfy = tag.indexOf("/" + close) > -1;
+        prop = tag.substring(open.length, tag.length - (selfy ? (close.length + 1) : close.length));        
+        prop = prop.replace(new RegExp("`(.+?)`", "g"), function (s, p1) {
+            return Mark.up(open + p1 + close, context);
         });
         testy = prop.trim().indexOf("if ") === 0;
         filters = prop.split("|");
         filters.shift(); // instead of splice(1)
         prop = prop.replace(/^\s*if/, "").split("|").shift().trim();
         token = testy ? "if" : prop.split("|")[0];
-        ctx = context[prop];
+        
+        // Sécuriser l'accès aux propriétés du contexte
+        ctx = context !== null && context !== undefined && context.hasOwnProperty(prop) ? context[prop] : undefined;
 
         // If an "if" statement without filters, assume "{{if foo|notempty}}"
         if (testy && !filters.length) {
@@ -229,15 +249,15 @@ Mark.up = function (template, context, options) {
         }
 
         // Does the tag have a corresponding closing tag? If so, find it and move the cursor.
-        if (!selfy && template.indexOf("{{/" + token) > -1) {
-            result = this._bridge(template, token);
+        if (!selfy && template.indexOf(open + "/" + token) > -1) {
+            result = this._bridge(template, token, open, close);
             tag = result[0];
             child = result[1];
             i += tag.match(re).length - 1; // fast forward
         }
 
         // Skip "else" tags. These are pulled out in _test().
-        if (/^\{\{\s*else\s*\}\}$/.test(tag)) {
+        if (new RegExp("^" + open.replace(/([.*+?^=!:${}()|[\]\/\\])/g, "\\$&") + "\\s*else\\s*" + close.replace(/([.*+?^=!:${}()|[\]\/\\])/g, "\\$&") + "$").test(tag)) {
             continue;
         }
 
@@ -256,8 +276,13 @@ Mark.up = function (template, context, options) {
 
         // Evaluating a loop counter ("#" or "##").
         else if (prop.indexOf("#") > -1) {
-            options.iter.sign = prop;
-            result = this._pipe(options.iter, filters);
+            if (!options.iter) {
+                console.error("Warning: Missing iterator for # symbol");
+                result = "";
+            } else {
+                options.iter.sign = prop;
+                result = this._pipe(options.iter, filters);
+            }
         }
 
         // Evaluating the current context.
@@ -298,11 +323,11 @@ Mark.up = function (template, context, options) {
 
         // Evaluating a block expression.
         else if (child) {
-            result = ctx ? Mark.up(child, ctx) : undefined;
+            result = ctx ? Mark.up(child, ctx, options) : undefined;
         }
 
         // Evaluating anything else.
-        else if (context.hasOwnProperty(prop)) {
+        else if (context && context.hasOwnProperty(prop)) {
             result = this._pipe(ctx, filters);
         }
 
@@ -317,7 +342,7 @@ Mark.up = function (template, context, options) {
         }
 
         // Replace the tag, e.g. "{{name}}", with the result, e.g. "Adam".
-        template = template.replace(tag, result === undefined ? "???" : result);
+        template = template.replace(tag, result === undefined ? "" : result);
     }
 
     return this.compact ? template.replace(/>\s+</g, "><") : template;
@@ -391,22 +416,22 @@ Mark.pipes = {
         return String(str).replace(/<\/?[^>]+>/gi, "");
     },
     size: function (obj) {
-        return obj.length;
+        return obj ? obj.length : 0;
     },
     length: function (obj) {
-        return obj.length;
+        return obj ? obj.length : 0;
     },
     reverse: function (arr) {
         return [].concat(arr).reverse();
     },
     join: function (arr, separator) {
-        return arr.join(separator);
+        return arr ? arr.join(separator) : "";
     },
     limit: function (arr, count, idx) {
-        return arr.slice(+idx || 0, +count + (+idx || 0));
+        return arr ? arr.slice(+idx || 0, +count + (+idx || 0)) : [];
     },
     split: function (str, separator) {
-        return str.split(separator || ",");
+        return str ? str.split(separator || ",") : [];
     },
     choose: function (bool, iffy, elsy) {
         return !!bool ? iffy : (elsy || "");
@@ -415,6 +440,7 @@ Mark.pipes = {
         return csv2.split(",")[csv1.match(/\w+/g).indexOf(obj + "")] || str;
     },
     sort: function (arr, prop) {
+        if (!arr) return [];
         var fn = function (a, b) {
             return a[prop] > b[prop] ? 1 : -1;
         };
@@ -448,13 +474,13 @@ Mark.pipes = {
         return !obj;
     },
     first: function (iter) {
-        return iter.idx === 0;
+        return iter && iter.idx === 0;
     },
     last: function (iter) {
-        return iter.idx === iter.size - 1;
+        return iter && iter.idx === iter.size - 1;
     },
     call: function (obj, fn) {
-        return obj[fn].apply(obj, [].slice.call(arguments, 2));
+        return obj && obj[fn] ? obj[fn].apply(obj, [].slice.call(arguments, 2)) : "";
     },
     set: function (obj, key) {
         Mark.globals[key] = obj; return "";
