@@ -1167,6 +1167,10 @@ Mark.pipes.euros = function (num) {
 
 See `src/extras/dates.js` and `src/extras/numbers.js` for additional examples.
 
+
+
+You can also use custom delimiters : 
+ `node templator.js -o "@@" -c "@@" info.json template.yaml > output1.yaml`
 ## Compatibility
 
 Markup.js is compatible with Chrome, Safari, Firefox, Internet Explorer 9,
